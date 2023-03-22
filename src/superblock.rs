@@ -2,7 +2,7 @@ use std::io::Read;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
-pub struct Superblock{
+pub(crate) struct Superblock{
     magic: u32,
     inode_count: u32,
     mod_time: u32,
