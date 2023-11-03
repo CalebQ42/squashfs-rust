@@ -1,24 +1,29 @@
-mod superblock;
+use std::{fs::File, io::{BufReader, Read}, sync::Mutex};
 
-pub struct Squash{
-    sup: crate::superblock::Superblock,
+use bincode;
+use serde::Deserialize;
+
+#[derive(Deserialize, Debug)]
+struct Superblock {
+    magic: u32,
 }
 
-pub fn read(rdr: &mut dyn std::io::Read) -> Squash{
-    Squash { sup: superblock::read_from(rdr) }
+pub struct Squashfs {
+    reader: Mutex<Box<dyn Read>>,
+    superblock: Superblock,
 }
 
-#[cfg(test)]
-mod tests{
-    use std::{fs::File, io};
-
-    use super::*;
-
-    #[test]
-    fn stuff() -> io::Result<()>{
-        let mut test_file = File::open("test.sfs")?;
-        let out = read(&mut test_file);
-        println!("{:?}", out.sup);
-        Ok(())
+impl Squashfs {
+    pub fn from_file(path: &str) -> Self {
+        Self::from_read(Box::new(BufReader::new(File::open(path).unwrap())))
+    }
+    
+    pub fn from_read(r: Box<dyn Read>) -> Self {
+        let reader = Mutex::new(r);
+        let superblock: Superblock = bincode::deserialize_from(reader.lock().unwrap().as_mut()).unwrap();
+        Squashfs {
+            reader,
+            superblock,
+        }
     }
 }
