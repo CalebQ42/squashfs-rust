@@ -6,7 +6,7 @@ mod Tests{
 
     #[test]
     fn test_superblock(){
-        let sfs = Squashfs::from_read(File::open("test.sfs").unwrap());
+        let sfs = Squashfs::from_file("test.sfs");
         println!("{:?}", sfs.superblock);
     }
 }
