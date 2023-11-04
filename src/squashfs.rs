@@ -27,8 +27,8 @@ impl Squashfs {
         }
         let root_inode = InodeRef::parse(superblock.root_ref);
         match superblock.compression {
-            //TODO: Implement
-            _ => (),
+            0 => (),
+            _ => panic!("Compression is not supported... yet."),
         }
         Self {
             reader,
