@@ -7,7 +7,7 @@ pub(crate) struct Superblock{
     pub(crate) mod_time: u32,
     pub(crate) block_size:u32,
     pub(crate) frag_count: u32,
-    pub(crate) compression: u32,
+    pub(crate) compression: u16,
     pub(crate) block_log: u16,
     pub(crate) flags: u16,
     pub(crate) id_count: u16,

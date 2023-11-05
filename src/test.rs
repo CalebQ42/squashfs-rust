@@ -1,6 +1,5 @@
 #[cfg(test)]
-mod Tests{
-    use std::fs::File;
+mod tests{
 
     use crate::Squashfs;
 
