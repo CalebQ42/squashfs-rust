@@ -28,8 +28,8 @@ impl Squashfs {
         }else if superblock.block_log != ((superblock.block_size as f32).log2() as u16){
             panic!("Block size and block log don't match. Archive is probably corrupted.");
         }else if superblock.ver_maj != 4 || superblock.ver_min != 0{
-            panic!("Unsupported squashfs version, or archive is corrupted");
-        } 
+            panic!("Unsupported squashfs version: {:?}.{:?}, or archive is corrupted", superblock.ver_maj, superblock.ver_min);
+        }
         let root_inode = InodeRef::parse(superblock.root_ref);
         let decompressor: Box<dyn Decompress> = match superblock.compression{
             0 => Box::new(Passthrough{}),
