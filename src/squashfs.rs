@@ -1,28 +1,25 @@
 mod test;
 mod superblock;
 mod compressors;
+mod inode;
 
-use std::{fs::File, io::{BufReader, Read}, sync::Mutex, time};
+use std::{io::{Read, Seek}, sync::Mutex, time};
 
 use bincode;
 use superblock::Superblock;
 use compressors::*;
 
-pub struct Squashfs {
-    reader: Mutex<Box<dyn Read>>,
+pub struct Squashfs<R: Read+Seek> {
+    reader: Mutex<Box<R>>,
     superblock: Superblock,
     root_inode: InodeRef,
     decompressor: Box<dyn Decompress>,
 }
 
-impl Squashfs {
-    pub fn from_file(path: &str) -> Self {
-        Self::from_read(Box::new(BufReader::new(File::open(path).unwrap())))
-    }
-    
-    pub fn from_read(r: Box<dyn Read>) -> Self {
-        let reader = Mutex::new(r);
-        let superblock: Superblock = bincode::deserialize_from(reader.lock().unwrap().as_mut()).unwrap();
+impl<R: Read+Seek> Squashfs<R> {
+    pub fn new(r: R) -> Self {
+        let mut r = Box::new(r);
+        let superblock: Superblock = bincode::deserialize_from(r.as_mut()).unwrap();
         if superblock.magic != 0x73717368 {
             panic!("Invalid magic number. Are you sure this is a squashfs archive?");
         }else if superblock.block_log != ((superblock.block_size as f32).log2() as u16){
@@ -39,10 +36,10 @@ impl Squashfs {
             4 => Box::new(XzLzmaDecomp{}),
             5 => Box::new(Lz4Decomp{}),
             6 => Box::new(ZstdDecomp{}),
-            _ => panic!("Compression is not supported... yet."),
+            _ => panic!("Invalid compression type: {}", superblock.compression),
         };
         Self {
-            reader,
+            reader: Mutex::new(r),
             superblock,
             root_inode,
             decompressor,
