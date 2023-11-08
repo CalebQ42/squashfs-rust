@@ -1,4 +1,4 @@
-mod types;
+pub(crate) mod types;
 
 use std::{any::Any, io::Read};
 
@@ -21,8 +21,8 @@ pub(crate) const EXT_FIFO_TYPE: u16 = 13;
 pub(crate) const EXT_SOCKET_TYPE: u16 = 14;
 
 pub(crate) struct Inode{
-    header: InodeHeader,
-    data: Box<dyn Any>,
+    pub(crate) header: InodeHeader,
+    pub(crate) data: Box<dyn Any>,
 }
 
 impl Inode{
