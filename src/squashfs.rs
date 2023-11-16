@@ -1,26 +1,25 @@
 mod test;
 mod superblock;
-mod decompressors;
 mod inode;
 mod metadata;
 mod folder;
 mod directory;
 
-use std::{io::{Read, Seek, SeekFrom}, sync::Mutex, time};
+use std::{io::{Read, Seek, SeekFrom}, sync::Mutex, time, ops::Deref};
 
 use bincode;
 use directory::decode_directory;
+use flate2::read::ZlibDecoder;
 use folder::Folder;
 use inode::Inode;
+use lzma::LzmaReader;
 use metadata::MetadataReader;
 use superblock::Superblock;
-use decompressors::*;
 
 pub struct Squashfs<R: Read+Seek> {
     reader: Mutex<Box<R>>,
     superblock: Superblock,
     root: Folder,
-    decompressor: Box<dyn Decompress>,
 }
 
 impl<R: Read+Seek> Squashfs<R> {
@@ -34,25 +33,14 @@ impl<R: Read+Seek> Squashfs<R> {
         }else if superblock.ver_maj != 4 || superblock.ver_min != 0{
             panic!("Unsupported squashfs version: {:?}.{:?}, or archive is corrupted", superblock.ver_maj, superblock.ver_min);
         }
-        let decompressor: Box<dyn Decompress> = match superblock.compression{
-            0 => Box::new(Passthrough{}),
-            1 => Box::new(ZlibDecomp{}),
-            2 => Box::new(XzLzmaDecomp{}),
-            3 => panic!("LZO compression is not supported... yet."),
-            4 => Box::new(XzLzmaDecomp{}),
-            5 => Box::new(Lz4Decomp{}),
-            6 => Box::new(ZstdDecomp{}),
-            _ => panic!("Invalid compression type: {}", superblock.compression),
-        };
         let root = {
-            let i = read_inode(r.as_mut(), superblock.root_ref, &superblock, &decompressor);
-            folder_from_inode(r.as_mut(), i, &superblock, &decompressor)
+            let i = read_inode(r.as_mut(), superblock.root_ref, &superblock);
+            folder_from_inode(r.as_mut(), i, &superblock)
         };
         Self {
             reader: Mutex::new(r),
             superblock,
             root,
-            decompressor,
         }
     }
 
@@ -61,28 +49,28 @@ impl<R: Read+Seek> Squashfs<R> {
     }
 
     fn read_inode(&self, reference: u64) -> Inode{
-        read_inode(self.reader.lock().unwrap().as_mut(), reference, &self.superblock, &self.decompressor)
+        read_inode(self.reader.lock().unwrap().as_mut(), reference, &self.superblock)
     }
 
     fn folder_from_inode(&self, i: Inode) -> Folder{
-        folder_from_inode(self.reader.lock().unwrap().as_mut(), i, &self.superblock, &self.decompressor)
+        folder_from_inode(self.reader.lock().unwrap().as_mut(), i, &self.superblock)
     }
 }
 
-fn read_inode<'a, R: Read+Seek>(rdr: &'a mut R, reference: u64, superblock: &'a Superblock, decompressor: &'a Box<dyn Decompress>) -> Inode{
+fn read_inode<'a, R: Read+Seek>(rdr: &'a mut R, reference: u64, superblock: &'a Superblock) -> Inode{
     let start = (reference>>16)+superblock.inode_start;
-    let mut reader = MetadataReader::new(rdr, decompressor, start);
-    reader.seek(SeekFrom::Current((reference & 0xFFFF) as i64)).unwrap();
+    let mut reader = MetadataReader::new(rdr, superblock.compression);
+    reader.read_exact(&mut vec![0u8; (reference & 0xFFFF) as usize]).unwrap();
     Inode::decode(&mut reader, superblock.block_size)
 }
 
-fn folder_from_inode<'a, R: Read+Seek>(rdr: &'a mut R, i: Inode, superblock: &'a Superblock, decompressor: &'a Box<dyn Decompress>) -> Folder{
+fn folder_from_inode<'a, R: Read+Seek>(rdr: &'a mut R, i: Inode, superblock: &'a Superblock) -> Folder{
     let entries: Vec<directory::Entry>;
     if i.header.inode_type == inode::DIR_TYPE{
         if let Some(dat) = i.data.downcast_ref::<inode::types::DirInode>(){
             rdr.seek(SeekFrom::Start(dat.block_start as u64 + superblock.dir_start)).unwrap();
-            let mut reader = MetadataReader::new(rdr, decompressor, dat.block_start as u64);
-            reader.seek(SeekFrom::Current(dat.block_offset as i64)).unwrap();
+            let mut reader = MetadataReader::new(rdr, superblock.compression);
+            reader.read_exact(&mut vec![0u8; dat.block_offset as usize]).unwrap();
             entries = decode_directory(&mut reader, dat.size);
         }else{
             panic!("Not actually a DirInode!");
@@ -90,8 +78,8 @@ fn folder_from_inode<'a, R: Read+Seek>(rdr: &'a mut R, i: Inode, superblock: &'a
     }else if i.header.inode_type == inode::EXT_DIR_TYPE{
         if let Some(dat) = i.data.downcast_ref::<inode::types::ExtDirInode>(){
             rdr.seek(SeekFrom::Start(dat.block_start as u64 + superblock.dir_start)).unwrap();
-            let mut reader = MetadataReader::new(rdr, decompressor, dat.block_start as u64);
-            reader.seek(SeekFrom::Current(dat.block_offset as i64)).unwrap();
+            let mut reader = MetadataReader::new(rdr, superblock.compression);
+            reader.read_exact(&mut vec![0u8; dat.block_offset as usize]).unwrap();
             entries = decode_directory(&mut reader, dat.size);
         }else{
             panic!("Not actually a ExtDirInode!");
@@ -102,5 +90,18 @@ fn folder_from_inode<'a, R: Read+Seek>(rdr: &'a mut R, i: Inode, superblock: &'a
     Folder{
         inode: i,
         entries,
+    }
+}
+
+fn get_decompressor_for<'a, R: Read>(r: &'a mut R, decomp_type: u16) -> Box<dyn Read>{
+    match decomp_type{
+        0 => Box::new(r),
+        1 => Box::new(ZlibDecoder::new(r)),
+        2 => Box::new(LzmaReader::new_decompressor(r)),
+        3 => panic!("LZO compression is not supported."),
+        4 => Box::new(LzmaReader::new_decompressor(r)),
+        5 => Box::new(lz4::Decoder::new(r).unwrap()),
+        6 => Box::new(zstd::Decoder::new(r).unwrap()),
+        _ => panic!("Invalid compression type: {}", decomp_type),
     }
 }
